@@ -33,104 +33,86 @@ Un service de raccourcissement d'URL moderne, **Event-Driven** et entièrement *
 
 ### 1. Démarrer l'infrastructure (Docker)
 
-Lancez les conteneurs pour DynamoDB Local, DynamoDB Admin et Minio.
-
+Dans un terminal séparé, lancez :
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
-> **Vérification :**
-> - **DynamoDB Admin** : [http://localhost:8001](http://localhost:8001)
-> - **Minio Console** : [http://localhost:9001](http://localhost:9001) (User: `minioadmin`, Pass: `minioadmin`)
 
-### 2. Installer les dépendances
+### 2. Initialiser les ressources
 
+Ensuite, dans un autre terminal, lancez :
 ```bash
-cd src
-npm install
+node src/lib/init-s3.js       # Pour créer le bucket
+node src/lib/init-dynamodb.js # Pour créer les tables
 ```
 
 ### 3. Lancer l'API (SAM Local)
 
-Dans un **premier terminal**, démarrez le serveur API local.
-
 ```bash
-npm start
-# Ou directement : sam local start-api
+sam local start-api --docker-network url-shortener-net
 ```
-L'API est maintenant accessible sur `http://127.0.0.1:3000`.
-
-### 4. Lancer le Watcher de Streams ⚡
-
-SAM CLI ne gère pas nativement les triggers DynamoDB Streams en local. Nous utilisons un script dédié pour surveiller les changements et invoquer les lambdas.
-Dans un **second terminal** :
-
-```bash
-cd src
-npm run watch-streams
-```
-> Ce processus détectera les ajouts dans `urls` et `click_events` et exécutera automatiquement les lambdas `fetch-favicon` et `stats-processor`.
 
 ---
 
 ## 📡 Utilisation des Endpoints
 
-### 1. Raccourcir une URL
+### 1. Raccourcir une URL (Lambda Shorten)
 
 **POST** `/shorten`
-
-```bash
-curl -X POST http://127.0.0.1:3000/shorten \
-  -H "Content-Type: application/json" \
-  -d '{"longUrl": "https://www.google.com"}'
-```
-**Réponse :**
 ```json
 {
-  "shortUrl": "http://127.0.0.1:3000/AbCdE1",
-  "shortKey": "AbCdE1"
+  "url": "https://www.google.com"
 }
 ```
 
-### 2. Redirection (et comptage du clic)
+**Sortie :**
+```json
+{
+    "shortKey": "WDnIeS",
+    "shortUrl": "http://localhost:3000/WDnIeS",
+    "longUrl": "https://www.google.com",
+    "createdAt": 1770423123010
+}
+```
+
+### 2. Redirection (Lambda Redirect)
 
 **GET** `/{shortKey}`
+Exemple : `http://127.0.0.1:3000/WDnIeS`
 
-Ouvrez simplement l'URL dans votre navigateur : `http://127.0.0.1:3000/AbCdE1`
-
-> ⚙️ **Effet de bord** : Une entrée est créée dans `click_events`. Le **Stream Watcher** va la détecter et déclencher `stats-processor` pour incrémenter le compteur journalier.
-
-### 3. Voir les URLs créées
-
-**GET** `/urls`
-
-```bash
-curl http://127.0.0.1:3000/urls
-```
-Retourne la liste complète, y compris le chemin vers le favicon (`faviconPath`) si le traitement asynchrone est terminé.
-
-### 4. Voir les statistiques
+### 3. Statistiques (Lambda GetStats)
 
 **GET** `/stats/{shortKey}`
+Exemple : `http://127.0.0.1:3000/stats/WDnIeS`
 
-```bash
-curl http://127.0.0.1:3000/stats/AbCdE1
+**Sortie :**
+```json
+{
+    "shortKey": "WDnIeS",
+    "stats": [
+        {
+            "statDate": "2026-02-07",
+            "totalClicks": 21,
+            "shortKey": "WDnIeS",
+            "updatedAt": 1770423264282
+        }
+    ]
+}
 ```
 
-## 🐞 Debugging & Astuces
+### 4. Liste des URLs (Lambda ListUrls)
 
-### Logs
-- **API** : Visibles dans le terminal où `sam local start-api` tourne.
-- **Streams** : Visibles dans le terminal où `npm run watch-streams` tourne.
+**GET** `/urls`
+Exemple : `http://127.0.0.1:3000/urls`
 
-### Visualisation des Données
-Utilisez **dynamodb-admin** sur [http://localhost:8001](http://localhost:8001) pour voir le contenu brut des tables :
-- `urls` : Vérifiez la colonne `faviconPath`.
-- `click_events` : Vérifiez que les clics sont enregistrés.
-- `daily_stats` : Vérifiez que les clics sont bien agrégés.
-
-### Forcer le traitement (Scan)
-Si vous avez inséré des données alors que le watcher était éteint, relancez simplement :
-```bash
-# Dans le dossier src/
-node local-stream-watcher.js
+**Sortie :**
+```json
+[
+    {
+        "shortKey": "WDnIeS",
+        "longUrl": "https://www.google.com",
+        "totalClicks": 6,
+        "favicon": "favicons/WDnIeS.ico"
+    }
+]
 ```
